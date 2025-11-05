@@ -8,6 +8,7 @@ import { productRouter } from './products/product.routes'; // Import product rou
 import { cartRouter } from './cart/cart.routes'; // Import cart routes
 import { orderRouter } from './orders/order.routes'; // Import order routes
 import { wishlistRouter } from './wishlist/wishlist.routes'; // Import wishlist routes
+import { reviewRouter } from './reviews/review.routes'; // Import review routes
 
 dotenv.config();
 
@@ -36,6 +37,9 @@ app.use('/api/cart', cartRouter);
 
 // Wishlist routes
 app.use('/api', wishlistRouter); // Note: /api/account/wishlist starts here
+
+// Review routes
+app.use('/api/reviews', reviewRouter);
 
 app.use('/api', orderRouter); // Note: /api/checkout/order and /api/account/orders start here
 
