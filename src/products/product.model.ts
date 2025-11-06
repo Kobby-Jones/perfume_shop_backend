@@ -57,7 +57,7 @@ export const getFilteredProducts = async (query: any) => {
 
   // --- 3. Pagination Logic ---
   const page = parseInt(query.page as string) || 1;
-  const limit = parseInt(query.limit as string) || 10;
+  const limit = parseInt(query.limit as string) || results.length;
   const startIndex = (page - 1) * limit;
   const paginatedResults = results.slice(startIndex, startIndex + limit);
 

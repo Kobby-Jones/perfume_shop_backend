@@ -1,27 +1,12 @@
-// lib/data/mock-products.ts
+// prisma/seed.ts
 
-/**
- * Interface for a single product object.
- * Defines the structure for product data used throughout the application.
- */
-export interface Product {
-    id: number;
-    name: string;
-    description: string;
-    price: number;
-    images: string[];
-    availableStock: number;
-    category: 'Men' | 'Women' | 'Unisex';
-    brand: string;
-    isFeatured: boolean;
-  }
-  
-  /**
-   * Mock data representing the perfume shop's product inventory.
-   * This will be used dynamically by all pages and components.
-   */
-  export const MOCK_PRODUCTS: Product[] =
-   [
+import { PrismaClient } from '@prisma/client';
+import bcrypt from 'bcrypt';
+
+const prisma = new PrismaClient();
+
+const productData = [
+
     {
       id: 1,
       name: "Midnight Rose EDP",
@@ -243,13 +228,40 @@ export interface Product {
       isFeatured: false,
     },
   ];
-  
-  /**
-   * Mock function to simulate fetching all products from an API.
-   * @returns A promise that resolves with the list of products.
-   */
-  export async function getProducts(): Promise<Product[]> {
-    // Simulate network delay for a real-world scenario
-    await new Promise(resolve => setTimeout(resolve, 500));
-    return MOCK_PRODUCTS;
+ 
+
+async function main() {
+  console.log("Seeding database...");
+
+  const passwordHash = await bcrypt.hash("admin123", 10);
+
+  await prisma.user.upsert({
+    where: { email: "admin@scentia.com" },
+    update: { passwordHash, name: "Admin Staff" },
+    create: {
+      email: "admin@scentia.com",
+      passwordHash,
+      name: "Admin Staff",
+      role: "admin",
+    },
+  });
+
+  for (const p of productData) {
+    await prisma.product.upsert({
+      where: { name: p.name },
+      update: {},
+      create: p,
+    });
   }
+
+  console.log("Seeding complete.");
+}
+
+main()
+  .catch((e) => {
+    console.error(e);
+    process.exit(1);
+  })
+  .finally(async () => {
+    await prisma.$disconnect();
+  });

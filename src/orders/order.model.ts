@@ -117,3 +117,9 @@ export const getOrderById = async (orderId: number): Promise<Order | undefined> 
     await new Promise(resolve => setTimeout(resolve, 300));
     return mockOrders.find(o => o.id === orderId);
 };
+
+export const getAllOrders = async (): Promise<Order[]> => { 
+    await new Promise(resolve => setTimeout(resolve, 300));
+    // Return a reverse copy of ALL orders
+    return mockOrders.slice().reverse(); 
+};

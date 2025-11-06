@@ -9,6 +9,7 @@ import { cartRouter } from './cart/cart.routes'; // Import cart routes
 import { orderRouter } from './orders/order.routes'; // Import order routes
 import { wishlistRouter } from './wishlist/wishlist.routes'; // Import wishlist routes
 import { reviewRouter } from './reviews/review.routes'; // Import review routes
+import { adminRouter } from './admin/admin.routes'; // Import admin routes
 
 dotenv.config();
 
@@ -42,6 +43,9 @@ app.use('/api', wishlistRouter); // Note: /api/account/wishlist starts here
 app.use('/api/reviews', reviewRouter);
 
 app.use('/api', orderRouter); // Note: /api/checkout/order and /api/account/orders start here
+
+// Admin Dashboard Routes (Highly restricted)
+app.use('/api/admin', adminRouter);
 
 // Basic health check route
 app.get('/', (req, res) => {
