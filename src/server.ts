@@ -19,7 +19,7 @@ const PORT = process.env.PORT || 4000;
 // Middleware
 // Allow communication between Next.js frontend (e.g., http://localhost:3000) and backend
 app.use(cors({
-  origin: 'http://localhost:3000', 
+  origin: 'https://scentiaperfume.netlify.app', // Update with your frontend URL
   credentials: true,
 }));
 
