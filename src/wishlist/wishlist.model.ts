@@ -1,75 +1,87 @@
 // src/wishlist/wishlist.model.ts
 
-import { getProductById } from '../products/product.model';
-// Import the products
-import { Product } from '../types/product';
-
-/**
- * Interface for the Wishlist state associated with a user.
- */
-interface WishlistDB {
-  userId: number;
-  productIds: number[]; // Array of product IDs saved by the user
-}
-
-// In-memory mock database for all wishlists (keyed by userId)
-const mockWishlists = new Map<number, WishlistDB>();
+import prisma from "../db";
+import { Product } from "@prisma/client";
 
 /**
  * Interface for the detailed Wishlist Item returned to the frontend.
  */
 export interface WishlistItem {
   product: Product;
-  dateAdded: string; // Used for sorting/display
+  dateAdded: Date;
 }
 
 // --- Helper Functions ---
 
 /**
- * Processes the raw product IDs into a detailed Wishlist structure for the frontend.
+ * Retrieves the user's detailed wishlist.
  */
 export async function getDetailedWishlist(userId: number): Promise<WishlistItem[]> {
-    // Simulate database retrieval
-    await new Promise(resolve => setTimeout(resolve, 300));
-    const wishlist = mockWishlists.get(userId);
-    if (!wishlist) return [];
-
-    // Reverse the list to show most recently added first
-    const detailPromises = wishlist.productIds.slice().reverse().map(async (productId) => {
-        const product = await getProductById(productId);
-        if (!product) return null;
-
-        return {
-            product,
-            dateAdded: new Date().toISOString(), // Mock date
-        } as WishlistItem;
+    const wishlist = await prisma.wishlist.findUnique({
+        where: { userId },
+        include: {
+            products: {
+                include: {
+                    product: true,
+                },
+                orderBy: {
+                    dateAdded: 'desc', // Matches frontend sorting expectation
+                }
+            },
+        },
     });
 
-    return (await Promise.all(detailPromises)).filter(item => item !== null) as WishlistItem[];
+    if (!wishlist) return [];
+
+    return wishlist.products.map(wp => ({
+        product: wp.product,
+        dateAdded: wp.dateAdded,
+    }));
 }
 
 /**
  * Adds a product to the user's wishlist.
  */
 export async function addProductToWishlist(userId: number, productId: number): Promise<void> {
-    await new Promise(resolve => setTimeout(resolve, 100));
-    const wishlist = mockWishlists.get(userId) || { userId, productIds: [] };
+    const product = await prisma.product.findUnique({ where: { id: productId } });
+    if (!product) throw new Error("Product not found.");
 
-    if (!wishlist.productIds.includes(productId)) {
-        wishlist.productIds.push(productId);
+    // Find or create the user's wishlist record
+    const wishlist = await prisma.wishlist.upsert({
+        where: { userId },
+        update: {},
+        create: { userId },
+    });
+
+    // Add the product to the junction table
+    try {
+        await prisma.wishlistProducts.create({
+            data: {
+                wishlistId: wishlist.id,
+                productId: productId,
+                // dateAdded is automatically set by @default(now()) - don't pass it manually
+            },
+        });
+    } catch (error: any) {
+        // Ignore if already exists (unique constraint violation)
+        if (!error.message.includes('Unique constraint failed')) {
+             throw error;
+        }
     }
-    mockWishlists.set(userId, wishlist);
 }
 
 /**
  * Removes a product from the user's wishlist.
  */
 export async function removeProductFromWishlist(userId: number, productId: number): Promise<void> {
-    await new Promise(resolve => setTimeout(resolve, 100));
-    const wishlist = mockWishlists.get(userId);
-
+    const wishlist = await prisma.wishlist.findUnique({ where: { userId } });
+    
     if (wishlist) {
-        wishlist.productIds = wishlist.productIds.filter(id => id !== productId);
-        mockWishlists.set(userId, wishlist);
+        await prisma.wishlistProducts.deleteMany({
+            where: {
+                wishlistId: wishlist.id,
+                productId: productId,
+            },
+        });
     }
 }

@@ -2,14 +2,16 @@
 
 import express from 'express';
 import dotenv from 'dotenv';
-import cors from 'cors'; // Important for connecting frontend and backend
+import cors from 'cors'; 
 import { authRouter } from './auth/auth.routes';
-import { productRouter } from './products/product.routes'; // Import product routes
-import { cartRouter } from './cart/cart.routes'; // Import cart routes
-import { orderRouter } from './orders/order.routes'; // Import order routes
-import { wishlistRouter } from './wishlist/wishlist.routes'; // Import wishlist routes
-import { reviewRouter } from './reviews/review.routes'; // Import review routes
-import { adminRouter } from './admin/admin.routes'; // Import admin routes
+import { productRouter } from './products/product.routes'; 
+import { cartRouter } from './cart/cart.routes'; 
+import { orderRouter } from './orders/order.routes'; 
+import { wishlistRouter } from './wishlist/wishlist.routes'; 
+import { reviewRouter } from './reviews/review.routes'; 
+import { adminRouter } from './admin/admin.routes'; 
+import { addressRouter } from './addresses/address.routes';
+import { publicDiscountRouter } from './discounts/discount.routes';
 
 dotenv.config();
 
@@ -17,34 +19,27 @@ const app = express();
 const PORT = process.env.PORT || 4000;
 
 // Middleware
-// Allow communication between Next.js frontend (e.g., http://localhost:3000) and backend
 app.use(cors({
-  origin: 'https://scentiaperfume.netlify.app', // Update with your frontend URL
+  // Use environment variable for frontend URL in production
+  origin: process.env.FRONTEND_URL || 'http://localhost:3000', 
   credentials: true,
 }));
 
-// Parses incoming JSON requests
 app.use(express.json()); 
 
 // --- API Routes ---
-// The authentication routes
 app.use('/api/auth', authRouter);
-
-// Product routes
-app.use('/api/products', productRouter); // Connect product router
-
-// Cart and Orders routes (grouped under /api)
+app.use('/api/products', productRouter); 
 app.use('/api/cart', cartRouter);
-
-// Wishlist routes
-app.use('/api', wishlistRouter); // Note: /api/account/wishlist starts here
-
-// Review routes
 app.use('/api/reviews', reviewRouter);
+app.use('/api/discounts', publicDiscountRouter); // Public discount validation route
 
-app.use('/api', orderRouter); // Note: /api/checkout/order and /api/account/orders start here
+// Group protected routes under /api, consistent with frontend requests:
+app.use('/api', wishlistRouter); // /api/account/wishlist
+app.use('/api', orderRouter); // /api/checkout/order, /api/account/orders
+app.use('/api', addressRouter); // NEW: /api/account/addresses
 
-// Admin Dashboard Routes (Highly restricted)
+// Admin Dashboard Routes (Highly restricted and authenticated by middleware)
 app.use('/api/admin', adminRouter);
 
 // Basic health check route

@@ -1,112 +1,106 @@
 // src/reviews/review.model.ts
 
+import prisma from "../db";
+import { Review as PrismaReview } from "@prisma/client";
+import { UserSafe } from "../auth/auth.model";
+
 /**
- * Interface for a single Review entry.
+ * Interface for a detailed Review entry returned to the frontend.
  */
-export interface Review {
+export interface ReviewDetail {
     id: number;
     productId: number;
     userId: number;
-    userName: string; // Stored for display convenience
-    rating: number; // 1 to 5 stars
+    userName: string;
+    rating: number; 
     title: string;
     comment: string;
-    date: string;
+    date: Date;
+    // Add verification or helpfulness if implemented later
 }
 
-// In-memory mock database for all reviews
-const mockReviews: Review[] = [
-    { 
-        id: 1, 
-        productId: 1, 
-        userId: 101, 
-        userName: "AromaFan", 
-        rating: 5, 
-        title: "Absolutely exquisite!", 
-        comment: "The Midnight Rose scent is rich and lasts all day. Worth every penny.", 
-        date: "2025-10-25" 
-    },
-    { 
-        id: 2, 
-        productId: 1, 
-        userId: 102, 
-        userName: "ScentLover", 
-        rating: 4, 
-        title: "Great daily perfume", 
-        comment: "A light floral, perfect for the office. Packaging was very elegant.", 
-        date: "2025-11-01" 
-    },
-    { 
-        id: 3, 
-        productId: 3, 
-        userId: 103, 
-        userName: "OudMaster", 
-        rating: 5, 
-        title: "Deep and luxurious", 
-        comment: "Velvet Oud is my new signature scent. Incredible longevity and complexity.", 
-        date: "2025-10-10" 
-    },
-];
-
 /**
- * Mock function to fetch reviews for a single product.
+ * Fetches reviews for a single product.
  */
-export async function getReviewsByProductId(productId: number): Promise<Review[]> {
-    await new Promise(resolve => setTimeout(resolve, 300));
-    // Filter by product ID and show newest first
-    return mockReviews
-        .filter(r => r.productId === productId)
-        .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+export async function getReviewsByProductId(productId: number): Promise<ReviewDetail[]> {
+    const reviewsWithUser = await prisma.review.findMany({
+        where: { productId },
+        include: {
+            user: {
+                select: { name: true } // Select only the name
+            }
+        },
+        orderBy: { createdAt: 'desc' },
+    });
+
+    return reviewsWithUser.map(r => ({
+        id: r.id,
+        productId: r.productId,
+        userId: r.userId,
+        userName: r.user.name, // Use the user's actual name
+        rating: r.rating,
+        title: r.title,
+        comment: r.comment,
+        date: r.createdAt,
+    }));
 }
 
 /**
- * Mock function to add a new review.
+ * Adds a new review, ensuring a unique constraint per user/product.
  */
 export async function addReview(reviewData: {
     productId: number;
     userId: number;
-    userName: string;
     rating: number;
     title: string;
     comment: string;
-}): Promise<Review> {
-    // Simulate async delay
-    await new Promise(resolve => setTimeout(resolve, 100));
+}): Promise<PrismaReview> {
+    try {
+        const newReview = await prisma.review.create({
+            data: {
+                productId: reviewData.productId,
+                userId: reviewData.userId,
+                rating: reviewData.rating,
+                title: reviewData.title,
+                comment: reviewData.comment,
+            },
+        });
+        
+        // **CRITICAL:** Update product rating/count after submission (Optional/Advanced: implement proper average calculation)
+        await prisma.$executeRaw`
+            UPDATE "Product"
+            SET "reviewCount" = (SELECT COUNT(*) FROM "Review" WHERE "productId" = ${reviewData.productId}),
+            "rating" = (SELECT AVG(rating) FROM "Review" WHERE "productId" = ${reviewData.productId})
+            WHERE id = ${reviewData.productId};
+        `;
 
-    // Prevent duplicate reviews by same user on the same product
-    const existingReview = mockReviews.find(
-        r => r.userId === reviewData.userId && r.productId === reviewData.productId
-    );
-    if (existingReview) {
-        throw new Error("You have already reviewed this product.");
+        return newReview;
+    } catch (e: any) {
+        if (e.code === 'P2002') { // Prisma unique constraint violation code
+            throw new Error("You have already submitted a review for this product.");
+        }
+        throw e;
     }
-
-    // Construct new review explicitly
-    const newReview: Review = {
-        id: mockReviews.length + 1,
-        productId: reviewData.productId,
-        userId: reviewData.userId,
-        userName: reviewData.userName,
-        rating: reviewData.rating,
-        title: reviewData.title,
-        comment: reviewData.comment,
-        date: new Date().toISOString().split('T')[0] ?? '',};
-
-    mockReviews.push(newReview);
-    return newReview;
 }
 
 /**
- * Calculates the average rating for a product.
+ * Calculates the average rating and count for a product directly from the database.
  */
-export function getAverageRating(productId: number): { average: number, count: number } {
-    const productReviews = mockReviews.filter(r => r.productId === productId);
-    const count = productReviews.length;
+export async function getAverageRating(productId: number): Promise<{ average: number, count: number }> {
+    const result = await prisma.review.aggregate({
+        where: { productId },
+        _avg: { rating: true },
+        _count: { _all: true },
+    });
+
+    const average = parseFloat((result._avg.rating || 0).toFixed(1));
+    const count = result._count._all;
     
-    if (count === 0) return { average: 0, count: 0 };
-    
-    const sum = productReviews.reduce((total, r) => total + r.rating, 0);
-    const average = parseFloat((sum / count).toFixed(1));
-    
+    // Fallback if no reviews exist, or use the pre-calculated fields
+    if (count === 0) {
+        const product = await prisma.product.findUnique({ where: { id: productId }, select: { rating: true, reviewCount: true } });
+        return { average: product?.rating || 0, count: product?.reviewCount || 0 };
+    }
+
     return { average, count };
 }

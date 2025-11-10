@@ -1,58 +1,42 @@
 // src/cart/cart.model.ts
 
-import { getProductById } from '../products/product.model';
-import { Product } from '../types/product';
+import prisma from "../db";
+import { Product, Cart as PrismaCart, CartItem as PrismaCartItem } from "@prisma/client";
 
-/**
- * Interface for a single item in the cart database table.
- */
-interface CartItemDB {
+// Define the core structures for external use
+export interface CartDetailItem {
   productId: number;
   quantity: number;
-}
-
-/**
- * Interface for the entire cart state associated with a user.
- */
-interface CartDB {
-  userId: number;
-  items: CartItemDB[];
-}
-
-/**
- * Interface for the detailed Cart Item returned to the frontend.
- * Includes derived product details and calculated subtotal.
- */
-export interface CartDetailItem extends CartItemDB {
   product: Product;
   subtotal: number;
 }
 
-// In-memory mock database for all carts (keyed by userId)
-const mockCarts = new Map<number, CartDB>();
-
-// --- Helper Functions ---
+// --- Cart Retrieval ---
 
 /**
- * Processes the raw cart items into a detailed structure for the frontend.
+ * Processes raw cart items into a detailed structure for the frontend.
  */
 export async function getDetailedCart(userId: number): Promise<{ items: CartDetailItem[], cartTotal: number }> {
-    const cart = mockCarts.get(userId);
-    if (!cart) return { items: [], cartTotal: 0 };
-
-    // Look up product details for each item
-    const detailPromises = cart.items.map(async (item) => {
-        const product = await getProductById(item.productId);
-        if (!product) return null;
-
-        return {
-            ...item,
-            product,
-            subtotal: product.price * item.quantity,
-        } as CartDetailItem;
+    const cartWithItems = await prisma.cart.findUnique({
+        where: { userId },
+        include: {
+            items: {
+                include: {
+                    product: true,
+                },
+            },
+        },
     });
 
-    const detailedItems = (await Promise.all(detailPromises)).filter(item => item !== null) as CartDetailItem[];
+    if (!cartWithItems) return { items: [], cartTotal: 0 };
+
+    const detailedItems: CartDetailItem[] = cartWithItems.items.map(item => ({
+        productId: item.productId,
+        quantity: item.quantity,
+        product: item.product,
+        subtotal: item.product.price * item.quantity,
+    }));
+
     const cartTotal = detailedItems.reduce((sum, item) => sum + item.subtotal, 0);
 
     return { items: detailedItems, cartTotal };
@@ -61,52 +45,71 @@ export async function getDetailedCart(userId: number): Promise<{ items: CartDeta
 // --- Cart Mutation Functions ---
 
 /**
- * Adds or updates an item in the user's cart.
+ * Adds or updates an item in the user's cart using a transaction.
  */
-export async function updateCartItem(userId: number, productId: number, quantity: number): Promise<CartDB> {
-    const cart = mockCarts.get(userId) || { userId, items: [] };
-    const product = await getProductById(productId);
+export async function updateCartItem(userId: number, productId: number, quantity: number): Promise<PrismaCart> {
+    return prisma.$transaction(async (tx) => {
+        const product = await tx.product.findUnique({ where: { id: productId } });
 
-    if (!product || product.availableStock < quantity) {
-        throw new Error("Product not available or quantity exceeds stock.");
-    }
-    
-    // Find or create item index
-    const existingIndex = cart.items.findIndex(item => item.productId === productId);
-
-    if (existingIndex > -1) {
-        // Update quantity
-        if (cart.items[existingIndex]) {
-            cart.items[existingIndex].quantity = quantity;
+        if (!product || product.availableStock < quantity) {
+            throw new Error("Product not available or quantity exceeds stock.");
         }
-    } else {
-        // Add new item
-        cart.items.push({ productId, quantity });
-    }
-    
-    // Filter out items with zero quantity
-    cart.items = cart.items.filter(item => item.quantity > 0);
 
-    mockCarts.set(userId, cart);
-    return cart;
+        // 1. Find or create the user's cart
+        const cart = await tx.cart.upsert({
+            where: { userId },
+            update: {},
+            create: { userId },
+        });
+
+        // 2. Update or delete the item
+        if (quantity > 0) {
+            await tx.cartItem.upsert({
+                where: {
+                    cartId_productId: { cartId: cart.id, productId },
+                },
+                update: { quantity },
+                create: { cartId: cart.id, productId, quantity },
+            });
+        } else {
+            // Delete if quantity is 0 or less
+            await tx.cartItem.deleteMany({
+                where: { cartId: cart.id, productId },
+            });
+        }
+        
+        // 3. Return the updated cart structure
+        return tx.cart.findUniqueOrThrow({ where: { id: cart.id } });
+    });
 }
 
 /**
  * Removes an item from the user's cart.
  */
-export async function removeCartItem(userId: number, productId: number): Promise<CartDB> {
-    const cart = mockCarts.get(userId);
+export async function removeCartItem(userId: number, productId: number): Promise<PrismaCart> {
+    const cart = await prisma.cart.findUnique({ where: { userId } });
 
-    if (cart) {
-        cart.items = cart.items.filter(item => item.productId !== productId);
-        mockCarts.set(userId, cart);
+    if (!cart) {
+        throw new Error("Cart not found.");
     }
-    return cart || { userId, items: [] };
+
+    // Attempt to delete the item
+    await prisma.cartItem.deleteMany({
+        where: { cartId: cart.id, productId },
+    });
+
+    return prisma.cart.findUniqueOrThrow({ where: { id: cart.id } });
 }
 
 /**
- * Clears the user's cart.
+ * Clears the user's cart by deleting all associated items.
  */
 export async function clearUserCart(userId: number): Promise<void> {
-    mockCarts.delete(userId);
+    const cart = await prisma.cart.findUnique({ where: { userId } });
+    if (cart) {
+        await prisma.cartItem.deleteMany({
+            where: { cartId: cart.id },
+        });
+        // Note: We keep the parent Cart record, just clear the items.
+    }
 }

@@ -1,53 +1,75 @@
 // src/orders/order.model.ts
 
-import { CartDetailItem, clearUserCart } from '../cart/cart.model';
+import prisma from "../db";
+import { Order as PrismaOrder, OrderItem as PrismaOrderItem, Prisma } from '@prisma/client';
+import { CartDetailItem } from '../cart/cart.model';
+
+// Define types for orders with relations
+type OrderWithItems = Prisma.OrderGetPayload<{
+    include: { items: true }
+}>;
+
+type OrderWithCount = Prisma.OrderGetPayload<{
+    include: { _count: { select: { items: true } } }
+}>;
+
+// --- Order Creation & Transaction ---
 
 /**
- * Interface for a complete Order record.
- */
-export interface Order {
-    id: number;
-    userId: number;
-    date: string;
-    status: 'Pending' | 'Processing' | 'Shipped' | 'Delivered' | 'Cancelled' | 'Failed';
-    items: CartDetailItem[];
-    shippingAddress: any;
-    shippingCost: number;
-    tax: number;
-    total: number;
-    paymentReference?: string; // NEW: Store Paystack reference
-    paymentStatus?: 'pending' | 'success' | 'failed'; // NEW: Track payment
-}
-
-// In-memory mock database for orders
-const mockOrders: Order[] = [];
-
-/**
- * Create a new order (before payment).
+ * Creates a new order record and moves items from the cart in an atomic transaction.
+ * Also performs the critical inventory deduction.
  */
 export const createOrder = async (
     userId: number, 
     items: CartDetailItem[], 
-    address: any, 
+    shippingAddress: any, 
     totals: { tax: number, shipping: number, grandTotal: number }
-): Promise<Order> => {
-    await new Promise(resolve => setTimeout(resolve, 500));
+): Promise<PrismaOrder> => {
     
-    const newOrder: Order = {
-        id: mockOrders.length + 1000,
-        userId,
-        date: new Date().toISOString().split('T')[0] ?? '',
-        status: 'Pending', // Start as Pending until payment verified
-        items,
-        shippingAddress: address,
-        shippingCost: totals.shipping,
-        tax: totals.tax,
-        total: totals.grandTotal,
-        paymentStatus: 'pending',
-    };
-    
-    mockOrders.push(newOrder);
-    return newOrder;
+    // We wrap this entire critical operation in a Prisma transaction for atomicity
+    return prisma.$transaction(async (tx) => {
+        
+        // 1. Check inventory and prepare OrderItems (including price snapshot)
+        for (const item of items) {
+            const product = await tx.product.findUnique({ where: { id: item.productId } });
+
+            if (!product || product.availableStock < item.quantity) {
+                throw new Error(`Insufficient stock for product ID ${item.productId}`);
+            }
+            
+            // Deduct inventory (CRITICAL STEP)
+            await tx.product.update({
+                where: { id: item.productId },
+                data: { availableStock: { decrement: item.quantity } },
+            });
+        }
+        
+        // 2. Create the Order record
+        const newOrder = await tx.order.create({
+            data: {
+                userId,
+                orderTotal: totals.grandTotal,
+                shippingCost: totals.shipping,
+                taxAmount: totals.tax,
+                shippingAddress: shippingAddress as Prisma.InputJsonValue,
+                status: 'Pending', 
+                paymentStatus: 'pending',
+            },
+        });
+        
+        // 3. Create Order Items using price snapshot from cart details
+        await tx.orderItem.createMany({
+            data: items.map(item => ({
+                orderId: newOrder.id,
+                productId: item.productId,
+                name: item.product.name,
+                price: item.product.price,
+                quantity: item.quantity,
+            })),
+        });
+
+        return newOrder;
+    });
 };
 
 /**
@@ -56,70 +78,96 @@ export const createOrder = async (
 export const updateOrderPaymentReference = async (
     orderId: number,
     reference: string
-): Promise<Order | undefined> => {
-    await new Promise(resolve => setTimeout(resolve, 200));
-    const order = mockOrders.find(o => o.id === orderId);
-    if (order) {
-        order.paymentReference = reference;
-    }
-    return order;
+): Promise<PrismaOrder> => {
+    return prisma.order.update({
+        where: { id: orderId },
+        data: { paymentRef: reference },
+    });
 };
 
 /**
- * Verify and complete order payment.
+ * Verify and complete order payment. Clears the cart *after* success.
  */
 export const verifyOrderPayment = async (
     orderId: number,
-    reference: string
-): Promise<Order | undefined> => {
-    await new Promise(resolve => setTimeout(resolve, 300));
-    const order = mockOrders.find(o => o.id === orderId);
-    
-    if (!order) return undefined;
-    
-    if (order.paymentReference !== reference) {
-        throw new Error('Payment reference mismatch');
-    }
-    
-    // Update order status to Processing after successful payment
-    order.paymentStatus = 'success';
-    order.status = 'Processing';
-    
-    // Clear the user's cart after successful payment
-    await clearUserCart(order.userId);
-    
-    return order;
+    reference: string,
+    userId: number
+): Promise<PrismaOrder> => {
+    return prisma.$transaction(async (tx) => {
+        // 1. Update order status to Processing
+        const updatedOrder = await tx.order.update({
+            where: { id: orderId, paymentRef: reference, userId },
+            data: { 
+                paymentStatus: 'success', 
+                status: 'Processing'
+            },
+        });
+        
+        // 2. Clear the user's cart (soft clear by deleting items)
+        const userCart = await tx.cart.findUnique({ where: { userId } });
+        if (userCart) {
+            await tx.cartItem.deleteMany({ where: { cartId: userCart.id } });
+        }
+        
+        return updatedOrder;
+    });
 };
 
 /**
- * Mark order as failed.
+ * Mark order as failed (revert inventory is complex, for production, handle manually).
  */
 export const markOrderFailed = async (orderId: number): Promise<void> => {
-    const order = mockOrders.find(o => o.id === orderId);
-    if (order) {
-        order.paymentStatus = 'failed';
-        order.status = 'Cancelled';
-    }
+    await prisma.order.updateMany({
+        where: { id: orderId, paymentStatus: { in: ['pending', 'failed'] } },
+        data: { paymentStatus: 'failed', status: 'Cancelled' },
+    });
+};
+
+// --- Order Retrieval ---
+
+/**
+ * Retrieve a user's order history summary.
+ */
+export const getUserOrders = async (userId: number): Promise<OrderWithCount[]> => {
+    return prisma.order.findMany({
+        where: { userId },
+        orderBy: { createdAt: 'desc' },
+        include: {
+            _count: { select: { items: true } }
+        }
+    });
 };
 
 /**
- * Retrieve a user's order history.
+ * Retrieve a single order with item details.
  */
-export const getUserOrders = async (userId: number): Promise<Order[]> => {
-    await new Promise(resolve => setTimeout(resolve, 300));
-    return mockOrders.filter(o => o.userId === userId).reverse();
+export const getOrderById = async (orderId: number): Promise<OrderWithItems | null> => {
+    return prisma.order.findUnique({
+        where: { id: orderId },
+        include: {
+            items: true,
+        },
+    });
 };
 
 /**
- * Retrieve a single order.
+ * Retrieve all orders for Admin.
  */
-export const getOrderById = async (orderId: number): Promise<Order | undefined> => {
-    await new Promise(resolve => setTimeout(resolve, 300));
-    return mockOrders.find(o => o.id === orderId);
+export const getAllOrders = async (): Promise<OrderWithCount[]> => { 
+    return prisma.order.findMany({ 
+        orderBy: { createdAt: 'desc' },
+        include: {
+            _count: { select: { items: true } }
+        }
+    });
 };
 
-export const getAllOrders = async (): Promise<Order[]> => { 
-    await new Promise(resolve => setTimeout(resolve, 300));
-    // Return a reverse copy of ALL orders
-    return mockOrders.slice().reverse(); 
+/**
+ * Admin: Updates the status of an order.
+ */
+export const updateOrderStatus = async (orderId: number, status: string): Promise<PrismaOrder> => {
+    return prisma.order.update({
+        where: { id: orderId },
+        data: { status },
+    });
 };

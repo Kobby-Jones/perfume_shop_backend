@@ -1,75 +1,85 @@
 // src/products/product.model.ts
 
-import { Product, MOCK_PRODUCTS } from "../types/product";
+import prisma from "../db";
+import { Product as PrismaProduct } from "@prisma/client";
 
 /**
- * Simulates fetching all products with filtering, sorting, and pagination.
- * This mimics real database logic using the shared product type.
+ * Interface for extended product data (matches frontend expectation)
+ */
+export interface ProductExtended extends PrismaProduct {
+    // Add any virtual fields the frontend expects here if needed, 
+    // but the updated schema covers most.
+}
+
+/**
+ * Retrieves a list of products based on query parameters (filtering, sorting, pagination).
  */
 export const getFilteredProducts = async (query: any) => {
-  // Simulate a small delay to represent DB latency
-  await new Promise((resolve) => setTimeout(resolve, 300));
-
-  let results = MOCK_PRODUCTS;
-
-  // --- 1. Filtering Logic ---
-  if (query.category) {
-    const categoryFilter = Array.isArray(query.category)
-      ? query.category
-      : [query.category];
-    results = results.filter((p) => categoryFilter.includes(p.category));
-  }
-
-  if (query.brand) {
-    const brandFilter = Array.isArray(query.brand)
-      ? query.brand
-      : [query.brand];
-    results = results.filter((p) => brandFilter.includes(p.brand));
-  }
-
-  if (query.minPrice) {
-    results = results.filter((p) => p.price >= parseFloat(query.minPrice));
-  }
-
-  if (query.maxPrice) {
-    results = results.filter((p) => p.price <= parseFloat(query.maxPrice));
-  }
-
-  const totalCount = results.length;
-
-  // --- 2. Sorting Logic ---
-  if (query.sort) {
-    switch (query.sort) {
-      case "price-asc":
-        results.sort((a, b) => a.price - b.price);
-        break;
-      case "price-desc":
-        results.sort((a, b) => b.price - a.price);
-        break;
-      case "name-asc":
-        results.sort((a, b) => a.name.localeCompare(b.name));
-        break;
-      case "name-desc":
-        results.sort((a, b) => b.name.localeCompare(a.name));
-        break;
+    const where: any = {};
+    const orderBy: any = {};
+    
+    // 1. Filtering Logic
+    if (query.category) {
+        where.category = { in: Array.isArray(query.category) ? query.category : [query.category] };
     }
-  }
+    if (query.brand) {
+        where.brand = { in: Array.isArray(query.brand) ? query.brand : [query.brand] };
+    }
+    if (query.minPrice || query.maxPrice) {
+        where.price = {};
+        if (query.minPrice) where.price.gte = parseFloat(query.minPrice);
+        if (query.maxPrice) where.price.lte = parseFloat(query.maxPrice);
+    }
+    if (query.search) {
+        where.OR = [
+            { name: { contains: query.search, mode: 'insensitive' as const } },
+            { brand: { contains: query.search, mode: 'insensitive' as const } },
+            { description: { contains: query.search, mode: 'insensitive' as const } },
+        ];
+    }
 
-  // --- 3. Pagination Logic ---
-  const page = parseInt(query.page as string) || 1;
-  const limit = parseInt(query.limit as string) || results.length;
-  const startIndex = (page - 1) * limit;
-  const paginatedResults = results.slice(startIndex, startIndex + limit);
+    // 2. Sorting Logic
+    switch (query.sort) {
+        case "price-asc":
+            orderBy.price = 'asc';
+            break;
+        case "price-desc":
+            orderBy.price = 'desc';
+            break;
+        case "name-asc":
+            orderBy.name = 'asc';
+            break;
+        case "name-desc":
+            orderBy.name = 'desc';
+            break;
+        case "newest":
+        default:
+            orderBy.id = 'desc';
+    }
 
-  return { products: paginatedResults, totalCount };
+    // 3. Pagination Logic
+    const page = parseInt(query.page as string) || 1;
+    const limit = parseInt(query.limit as string) || 20;
+    const skip = (page - 1) * limit;
+
+    const [products, totalCount] = await prisma.$transaction([
+        prisma.product.findMany({
+            where,
+            orderBy,
+            skip,
+            take: limit,
+        }),
+        prisma.product.count({ where }),
+    ]);
+
+    return { products, totalCount };
 };
 
 /**
  * Retrieves a single product by its ID.
  */
-export const getProductById = async (
-  id: number
-): Promise<Product | undefined> => {
-  await new Promise((resolve) => setTimeout(resolve, 300));
-  return MOCK_PRODUCTS.find((p) => p.id === id);
+export const getProductById = async (id: number): Promise<PrismaProduct | null> => {
+    return prisma.product.findUnique({
+        where: { id },
+    });
 };

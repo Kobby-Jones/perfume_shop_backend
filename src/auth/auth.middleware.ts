@@ -2,7 +2,8 @@
 
 import { Request, Response, NextFunction } from 'express';
 import jwt, { JwtPayload } from 'jsonwebtoken';
-import { findUserByEmail } from './auth.model'; // ✅ Add this so we can validate roles.
+import { findUserByEmailWithHash } from './auth.model'; 
+import { UserSafe } from './auth.model'; // Import the safe user type
 
 /**
  * Extend Express Request to include authenticated user data.
@@ -11,11 +12,11 @@ export interface AuthRequest extends Request {
   user?: {
     id: number;
     email: string;
+    role: 'user' | 'admin'; // Include role in the request object
   };
 }
 
-// Use environment variable in production.
-const JWT_SECRET = process.env.JWT_SECRET || 'a_secret_key_for_development_only';
+const JWT_SECRET = process.env.JWT_SECRET || 'a_secure_default_secret_for_dev_only';
 
 /**
  * Middleware to verify bearer JWT token.
@@ -37,15 +38,17 @@ export const authenticateToken = (
   }
 
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
+    const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload & { id: number; email: string; role: 'user' | 'admin' };
 
-    if (!decoded || typeof decoded === 'string' || !decoded.id || !decoded.email) {
-      return res.status(403).json({ message: 'Invalid token payload.' });
+    if (!decoded || !decoded.id || !decoded.email || !decoded.role) {
+      return res.status(403).json({ message: 'Invalid token payload or missing user data.' });
     }
 
+    // Set authenticated user data on the request
     req.user = {
       id: decoded.id,
       email: decoded.email,
+      role: decoded.role,
     };
 
     next();
@@ -57,23 +60,23 @@ export const authenticateToken = (
 
 /**
  * Middleware to check if the authenticated user is an admin.
- * Requires authenticateToken to run first.
+ * Performs a database lookup for the most up-to-date role information.
  */
 export const isAdmin = async (req: AuthRequest, res: Response, next: NextFunction) => {
-  if (!req.user?.email) {
-    return res.status(401).json({ message: 'User not authenticated.' });
+  // Check if token already provided basic role info
+  if (req.user?.role === 'admin') {
+      // Re-verify role from DB for hardened security, preventing role tampering via token spoofing
+      try {
+          const user = await findUserByEmailWithHash(req.user.email);
+          if (user?.role === 'admin') {
+              return next();
+          }
+      } catch (error) {
+          console.error('Admin DB check failed:', error);
+          return res.status(500).json({ message: 'Authorization check failed.' });
+      }
   }
 
-  try {
-    const user = await findUserByEmail(req.user.email);
-
-    if (user && user.role === 'admin') {
-      return next(); // ✅ Continue to route
-    }
-
-    return res.status(403).json({ message: 'Access denied. Administrator privileges required.' });
-  } catch (error) {
-    console.error('Admin check error:', error);
-    return res.status(500).json({ message: 'Authorization check failed.' });
-  }
+  // If initial check failed or DB role is not admin
+  return res.status(403).json({ message: 'Access denied. Administrator privileges required.' });
 };

@@ -23,7 +23,7 @@ export const listReviews = async (req: Request, res: Response) => {
 
     try {
         const reviews = await getReviewsByProductId(productId);
-        const { average, count } = getAverageRating(productId);
+        const { average, count } = await getAverageRating(productId); // Added await
 
         return res.status(200).json({ 
             reviews,
@@ -48,13 +48,10 @@ export const createReview = async (req: AuthRequest, res: Response) => {
     }
 
     try {
-        // Mock user lookup to get name for display
-        const userName = req.user!.email.split('@')[0] || 'Anonymous';
-        
+        // Remove userName from addReview call - it's not in the type definition
         const newReview = await addReview({
             productId,
             userId,
-            userName: userName,
             rating,
             title,
             comment,

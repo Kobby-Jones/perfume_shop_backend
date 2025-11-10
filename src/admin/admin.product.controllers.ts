@@ -1,42 +1,46 @@
 // src/admin/admin.product.controllers.ts
 
 import { Request, Response } from 'express';
-import { getProductById } from '../products/product.model'; // Reusing types/logic
+import { getProductById } from '../products/product.model'; 
 import { AuthRequest } from '../auth/auth.middleware';
-import { Product } from '../types/product'
-
-// MOCK: Array to simulate new product creation
-let nextProductId = 10; 
+import prisma from '../db';
+import { Prisma } from '@prisma/client';
 
 /**
  * POST /api/admin/products
  * Creates a new product.
  */
 export const createProduct = async (req: AuthRequest, res: Response) => {
-    // NOTE: Full validation (Joi/Zod) would be used here
-    const { name, description, price, availableStock, category, brand } = req.body;
+    const { name, description, price, availableStock, category, brand, originalPrice, details, images } = req.body;
 
-    if (!name || !price || !category) {
-        return res.status(400).json({ message: 'Missing required product fields.' });
+    if (!name || !price || !category || !description || availableStock === undefined) {
+        return res.status(400).json({ message: 'Missing required product fields (name, price, category, stock, description).' });
     }
 
-    // MOCK: Create new product and add to model's list
-    const newProduct: Product = {
-        id: nextProductId++,
-        name,
-        description: description || 'New product added by admin.',
-        price: parseFloat(price),
-        images: req.body.images || ['/images/placeholder.jpg'],
-        availableStock: parseInt(availableStock) || 0,
-        category,
-        brand: brand || 'Scentia Internal',
-        isFeatured: false,
-    };
-    
-    // In a real app, this calls a database INSERT and invalidates cache
-    // For mock: MOCK_PRODUCTS.push(newProduct); 
-    
-    return res.status(201).json({ message: 'Product created successfully.', product: newProduct });
+    try {
+        const newProduct = await prisma.product.create({
+            data: {
+                name,
+                description,
+                price: parseFloat(price),
+                availableStock: parseInt(availableStock),
+                category,
+                brand,
+                originalPrice: originalPrice ? parseFloat(originalPrice) : null,
+                details: details as Prisma.InputJsonValue,
+                images: images || [], // Expects an array of URLs or empty array
+                isFeatured: req.body.isFeatured ?? false,
+            },
+        });
+        
+        return res.status(201).json({ message: 'Product created successfully.', product: newProduct });
+    } catch (error: any) {
+        if (error.code === 'P2002') {
+             return res.status(409).json({ message: 'Product name already exists.' });
+        }
+        console.error('Create Product Error:', error);
+        return res.status(500).json({ message: 'Internal server error during product creation.' });
+    }
 };
 
 /**
@@ -45,28 +49,70 @@ export const createProduct = async (req: AuthRequest, res: Response) => {
  */
 export const updateProduct = async (req: AuthRequest, res: Response) => {
     const { id } = req.params;
-
+    const updates = req.body; // Add this line
+    
+    // Check if id exists before parsing
     if (!id) {
-        return res.status(400).json({ message: 'Product ID is required in URL.' });
+        return res.status(400).json({ message: 'Product ID is required.' });
     }
-
+    
     const productId = parseInt(id, 10);
-    const updates = req.body;
 
     if (isNaN(productId)) {
         return res.status(400).json({ message: 'Invalid product ID.' });
     }
 
-    const existingProduct = await getProductById(productId);
+    try {
+        const updatedProduct = await prisma.product.update({
+            where: { id: productId },
+            data: {
+                ...updates,
+                price: updates.price ? parseFloat(updates.price) : undefined,
+                availableStock: updates.availableStock !== undefined ? parseInt(updates.availableStock) : undefined,
+                originalPrice: updates.originalPrice ? parseFloat(updates.originalPrice) : null,
+                details: updates.details as Prisma.InputJsonValue,
+            },
+        });
 
-    if (!existingProduct) {
-        return res.status(404).json({ message: 'Product not found.' });
+        return res.status(200).json({
+            message: 'Product updated successfully.',
+            product: updatedProduct
+        });
+    } catch (error: any) {
+        if (error.code === 'P2025') {
+            return res.status(404).json({ message: 'Product not found.' });
+        }
+        console.error('Update Product Error:', error);
+        return res.status(500).json({ message: 'Internal server error during product update.' });
     }
+};
 
-    const updatedProduct = { ...existingProduct, ...updates };
+/**
+ * DELETE /api/admin/products/:id
+ * Deletes a product.
+ */
+export const deleteProduct = async (req: AuthRequest, res: Response) => {
+    const { id } = req.params;
+    
+    // Check if id exists before parsing
+    if (!id) {
+        return res.status(400).json({ message: 'Product ID is required.' });
+    }
+    
+    const productId = parseInt(id, 10);
 
-    return res.status(200).json({
-        message: 'Product updated successfully.',
-        product: updatedProduct
-    });
+    if (isNaN(productId)) {
+        return res.status(400).json({ message: 'Invalid product ID.' });
+    }
+    
+    try {
+        await prisma.product.delete({ where: { id: productId } });
+        return res.status(204).json({ message: 'Product deleted successfully.' });
+    } catch (error: any) {
+        if (error.code === 'P2025') {
+            return res.status(404).json({ message: 'Product not found.' });
+        }
+        console.error('Delete Product Error:', error);
+        return res.status(500).json({ message: 'Internal server error during product deletion.' });
+    }
 };
