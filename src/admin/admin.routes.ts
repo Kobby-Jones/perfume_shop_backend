@@ -15,6 +15,12 @@ import {
 } from './admin.controllers';
 import { listAllReviews, updateReviewStatus } from './admin.review.controllers';
 import { createUserController, deleteUserController } from './admin.user.controllers';
+import { 
+    getReportsOverview, 
+    getMonthlySales, 
+    getCategorySales, 
+    getTopProducts 
+} from './admin.reports.controllers';
 import prisma from '../db';
 
 export const adminRouter = Router();
@@ -25,6 +31,12 @@ adminRouter.use(authenticateToken, isAdmin);
 // --- Dashboard & Reports ---
 adminRouter.get('/dashboard-stats', getDashboardStats);
 adminRouter.get('/reports/sales', getSalesData);
+
+// --- Reports & Analytics ---
+adminRouter.get('/reports/overview', getReportsOverview);
+adminRouter.get('/reports/monthly-sales', getMonthlySales);
+adminRouter.get('/reports/category-sales', getCategorySales);
+adminRouter.get('/reports/top-products', getTopProducts);
 
 // --- Product Management ---
 // GET /api/admin/products (Uses standard listProducts controller)
@@ -41,16 +53,38 @@ adminRouter.delete('/products/:id', deleteProduct);
 // GET /api/admin/orders
 adminRouter.get('/orders', async (req, res) => {
     try {
-        const allOrders = await getAllOrders();
+        const allOrders = await prisma.order.findMany({
+            include: {
+                user: {
+                    select: {
+                        id: true,
+                        name: true,
+                        email: true
+                    }
+                },
+                items: {
+                    select: {
+                        id: true
+                    }
+                }
+            },
+            orderBy: {
+                createdAt: 'desc'
+            }
+        });
         
         const summary = allOrders.map(o => ({
             id: o.id,
-            date: o.createdAt.toISOString().split('T')[0],
+            createdAt: o.createdAt.toISOString(),
             status: o.status,
-            total: o.orderTotal,
-            itemCount: (o as any)._count.items,
-            userId: o.userId,
             paymentStatus: o.paymentStatus,
+            orderTotal: o.orderTotal,
+            itemCount: o.items.length,
+            user: {
+                id: o.user.id,
+                name: o.user.name,
+                email: o.user.email
+            }
         }));
         
         return res.status(200).json({ orders: summary });
@@ -59,6 +93,70 @@ adminRouter.get('/orders', async (req, res) => {
         return res.status(500).json({ message: 'Failed to retrieve all orders.' });
     }
 });
+
+
+// GET /api/admin/orders/:id (Get single order details)
+adminRouter.get('/orders/:id', async (req, res) => {
+    try {
+        const orderId = parseInt(req.params.id || '0');
+        
+        if (isNaN(orderId) || orderId === 0) {
+            return res.status(400).json({ message: 'Invalid order ID.' });
+        }
+
+        const order = await prisma.order.findUnique({
+            where: { id: orderId },
+            include: {
+                user: {
+                    select: {
+                        id: true,
+                        name: true,
+                        email: true
+                    }
+                },
+                items: {
+                    select: {
+                        id: true,
+                        productId: true,
+                        name: true,
+                        price: true,
+                        quantity: true
+                    }
+                }
+            }
+        });
+
+        if (!order) {
+            return res.status(404).json({ message: 'Order not found.' });
+        }
+
+        // Format the response
+        const orderDetails = {
+            id: order.id,
+            userId: order.userId,
+            status: order.status,
+            paymentStatus: order.paymentStatus,
+            paymentRef: order.paymentRef,
+            orderTotal: order.orderTotal,
+            shippingCost: order.shippingCost,
+            taxAmount: order.taxAmount,
+            discountCode: order.discountCode,
+            discountAmount: order.discountAmount,
+            shippingAddress: order.shippingAddress,
+            user: order.user,
+            items: order.items,
+            createdAt: order.createdAt.toISOString(),
+            updatedAt: order.updatedAt.toISOString()
+        };
+
+        return res.status(200).json(orderDetails);
+    } catch (error) {
+        console.error('Get Order Details Error:', error);
+        return res.status(500).json({ message: 'Failed to retrieve order details.' });
+    }
+});
+
+
 
 // PUT /api/admin/orders/:id/status (Admin action to update fulfillment status)
 adminRouter.put('/orders/:id/status', async (req, res) => {
@@ -75,7 +173,7 @@ adminRouter.put('/orders/:id/status', async (req, res) => {
         console.error('Update Order Status Error:', error);
         return res.status(500).json({ message: 'Failed to update order status.' });
     }
-});
+});;
 
 // --- User Management ---
 // GET /api/admin/users
