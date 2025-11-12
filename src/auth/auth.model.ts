@@ -12,6 +12,14 @@ export interface UserSafe {
     createdAt: Date;
 }
 
+export interface AccountStats {
+    totalOrders: number;
+    totalSpent: number;
+    wishlistItems: number;
+    rewardPoints: number;
+    accountTier: 'Bronze' | 'Silver' | 'Gold';
+}
+
 /**
  * Retrieves a user's details for safe external consumption.
  */
@@ -43,13 +51,13 @@ export const findUserById = async (id: number): Promise<UserSafe | null> => {
 };
 
 /**
- * Saves a new user to the database, ensuring default role is set.
+ * Saves a new user to the database.
  */
 export const saveUser = async (data: { name: string; email: string; passwordHash: string }): Promise<PrismaUser> => {
     return prisma.user.create({
         data: {
             ...data,
-            role: 'user', // Explicitly ensure new users are 'user'
+            role: 'user',
         },
     });
 };
@@ -58,24 +66,23 @@ export const saveUser = async (data: { name: string; email: string; passwordHash
  * Updates a user's profile information.
  */
 export const updateProfile = async (userId: number, data: { name?: string; email?: string }): Promise<UserSafe> => {
-  // Build the update object, only including defined properties
-  const updateData: { name?: string; email?: string } = {};
-  
-  if (data.name !== undefined) {
-      updateData.name = data.name;
-  }
-  
-  if (data.email !== undefined) {
-      updateData.email = data.email;
-  }
-  
-  const updatedUser = await prisma.user.update({
-      where: { id: userId },
-      data: updateData,
-  });
-  
-  return toUserSafe(updatedUser);
+    const updateData: { name?: string; email?: string } = {};
+    
+    if (data.name !== undefined) {
+        updateData.name = data.name;
+    }
+    if (data.email !== undefined) {
+        updateData.email = data.email;
+    }
+
+    const updatedUser = await prisma.user.update({
+        where: { id: userId },
+        data: updateData,
+    });
+
+    return toUserSafe(updatedUser);
 };
+
 /**
  * Updates a user's password hash.
  */
@@ -97,15 +104,53 @@ export const findAllUsersWithStats = async () => {
             email: true,
             role: true,
             createdAt: true,
-            // Use aggregation to count orders
             _count: {
                 select: {
-                    orders: true
-                }
-            }
+                    orders: true,
+                },
+            },
         },
         orderBy: {
-            createdAt: 'desc'
-        }
+            createdAt: 'desc',
+        },
     });
+};
+
+/**
+ * Fetches consolidated statistics for the user's dashboard.
+ */
+export const getAccountStats = async (userId: number): Promise<AccountStats> => {
+    const [orders, wishlistCount] = await prisma.$transaction([
+        prisma.order.findMany({
+            where: { 
+                userId,
+                paymentStatus: 'success',
+            },
+            select: { 
+                orderTotal: true,
+            },
+        }),
+        prisma.wishlistProducts.count({
+            where: {
+                wishlist: { userId }
+            }
+        })
+    ]);
+
+    const totalOrders = await prisma.order.count({ where: { userId } });
+    const totalSpent = orders.reduce((sum, order) => sum + order.orderTotal, 0);
+
+    const rewardPoints = Math.floor(totalSpent / 10);
+
+    let accountTier: AccountStats['accountTier'] = 'Bronze';
+    if (totalSpent >= 5000) accountTier = 'Gold';
+    else if (totalSpent >= 2000) accountTier = 'Silver';
+
+    return {
+        totalOrders,
+        totalSpent: parseFloat(totalSpent.toFixed(2)),
+        wishlistItems: wishlistCount,
+        rewardPoints,
+        accountTier,
+    };
 };

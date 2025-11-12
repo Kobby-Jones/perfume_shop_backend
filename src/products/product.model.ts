@@ -12,6 +12,29 @@ export interface ProductExtended extends PrismaProduct {
 }
 
 /**
+ * Retrieves dynamic options for the product filtering sidebar.
+ */
+export const getFilterOptions = async (): Promise<{ brands: string[], maxPrice: number }> => {
+    // 1. Get unique brands
+    const brands = await prisma.product.findMany({
+        distinct: ['brand'],
+        select: { brand: true },
+        orderBy: { brand: 'asc' },
+    });
+    
+    // 2. Get maximum price
+    const maxPriceResult = await prisma.product.aggregate({
+        _max: { price: true },
+    });
+
+    return {
+        brands: brands.map(b => b.brand),
+        maxPrice: maxPriceResult._max.price || 1000, // Default to 1000 if no products exist
+    };
+};
+
+
+/**
  * Retrieves a list of products based on query parameters (filtering, sorting, pagination).
  */
 export const getFilteredProducts = async (query: any) => {
@@ -23,7 +46,9 @@ export const getFilteredProducts = async (query: any) => {
         where.category = { in: Array.isArray(query.category) ? query.category : [query.category] };
     }
     if (query.brand) {
-        where.brand = { in: Array.isArray(query.brand) ? query.brand : [query.brand] };
+        // Handle comma-separated string if coming directly from URL query
+        const brandList = Array.isArray(query.brand) ? query.brand : (typeof query.brand === 'string' ? query.brand.split(',') : []);
+        where.brand = { in: brandList.map((b: string) => b.trim()) };
     }
     if (query.minPrice || query.maxPrice) {
         where.price = {};

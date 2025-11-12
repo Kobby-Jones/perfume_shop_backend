@@ -1,7 +1,7 @@
 // src/products/product.controllers.ts
 
 import { Request, Response } from 'express';
-import { getFilteredProducts, getProductById } from './product.model';
+import { getFilteredProducts, getProductById, getFilterOptions } from './product.model';
 
 /**
  * GET /api/products
@@ -44,5 +44,20 @@ export const getProduct = async (req: Request, res: Response) => {
   } catch (error) {
     console.error(`Error fetching product ${id}:`, error);
     return res.status(500).json({ message: 'Internal server error.' });
+  }
+};
+
+/**
+ * GET /api/products/filters
+ * Retrieves dynamic filter options (brands and max price).
+ */
+export const listFilterOptions = async (req: Request, res: Response) => {
+  try {
+    const options = await getFilterOptions();
+    
+    return res.status(200).json(options);
+  } catch (error) {
+    console.error('Error fetching filter options:', error);
+    return res.status(500).json({ message: 'Failed to retrieve filter options.' });
   }
 };

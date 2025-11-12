@@ -19,7 +19,7 @@ export async function getReportsOverview(req: AuthRequest, res: Response) {
         const revenueData = await prisma.order.aggregate({
             where: {
                 createdAt: { gte: startDate },
-                paymentStatus: { in: ['completed', 'paid'] }
+                paymentStatus: { in: ['completed', 'paid', 'success'] }
             },
             _sum: {
                 orderTotal: true
@@ -78,7 +78,7 @@ export async function getMonthlySales(req: AuthRequest, res: Response) {
         const orders = await prisma.order.findMany({
             where: {
                 createdAt: { gte: startDate },
-                paymentStatus: { in: ['completed', 'paid'] }
+                paymentStatus: { in: ['completed', 'paid', 'success'] }
             },
             select: {
                 createdAt: true,

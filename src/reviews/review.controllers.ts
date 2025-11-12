@@ -2,13 +2,14 @@
 
 import { Request, Response } from 'express';
 import { AuthRequest } from '../auth/auth.middleware';
-import { getReviewsByProductId, addReview, getAverageRating } from './review.model';
+import { getReviewsByProductId, addReview, getAverageRating, incrementReviewHelpfulCount } from './review.model';
 
 /**
  * GET /api/reviews/:productId
  * Retrieves all reviews and average rating for a product.
  */
 export const listReviews = async (req: Request, res: Response) => {
+// ... (remains unchanged)
     const productIdStr = req.params.productId;
     
     if (!productIdStr) {
@@ -23,7 +24,7 @@ export const listReviews = async (req: Request, res: Response) => {
 
     try {
         const reviews = await getReviewsByProductId(productId);
-        const { average, count } = await getAverageRating(productId); // Added await
+        const { average, count } = await getAverageRating(productId);
 
         return res.status(200).json({ 
             reviews,
@@ -40,6 +41,7 @@ export const listReviews = async (req: Request, res: Response) => {
  * Creates a new review (requires authentication).
  */
 export const createReview = async (req: AuthRequest, res: Response) => {
+// ... (remains unchanged)
     const { productId, rating, title, comment } = req.body;
     const userId = req.user!.id; 
 
@@ -48,7 +50,6 @@ export const createReview = async (req: AuthRequest, res: Response) => {
     }
 
     try {
-        // Remove userName from addReview call - it's not in the type definition
         const newReview = await addReview({
             productId,
             userId,
@@ -60,5 +61,25 @@ export const createReview = async (req: AuthRequest, res: Response) => {
         return res.status(201).json(newReview);
     } catch (error: any) {
         return res.status(409).json({ message: error.message || 'Failed to submit review.' });
+    }
+};
+
+/**
+ * POST /api/reviews/:reviewId/helpful
+ * Increments the helpful count for a review.
+ */
+export const toggleHelpful = async (req: AuthRequest, res: Response) => {
+    const reviewId = parseInt(req.params.reviewId || '0');
+
+    if (isNaN(reviewId) || reviewId === 0) {
+        return res.status(400).json({ message: 'Invalid review ID.' });
+    }
+
+    try {
+        await incrementReviewHelpfulCount(reviewId);
+        return res.status(200).json({ message: 'Helpful count updated.' });
+    } catch (error) {
+        console.error('Toggle Helpful Error:', error);
+        return res.status(500).json({ message: 'Failed to update helpful status.' });
     }
 };

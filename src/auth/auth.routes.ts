@@ -7,7 +7,10 @@ import {
     logoutUser, 
     getCurrentUser, 
     updateProfileInfo,
-    changePassword 
+    changePassword,
+    forgotPassword,
+    resetPassword,
+    getAccountStatsController // ← NEW
 } from './auth.controllers';
 import { authenticateToken } from './auth.middleware';
 
@@ -16,16 +19,16 @@ export const authRouter = Router();
 // --- PUBLIC AUTHENTICATION ROUTES ---
 authRouter.post('/register', registerUser);
 authRouter.post('/login', loginUser);
-authRouter.post('/logout', logoutUser); // Client-side cleanup
+authRouter.post('/logout', logoutUser);
 
-// Note: Forgot password is a frontend-only stub for now.
+// NEW: Password Recovery Routes
+authRouter.post('/forgot-password', forgotPassword);
+authRouter.post('/reset-password', resetPassword);
 
 // --- PROTECTED ACCOUNT ROUTES ---
-// GET /api/auth/me (Session verification)
-authRouter.get('/me', authenticateToken, getCurrentUser); 
-
-// PUT /api/auth/profile (Update name/email)
+authRouter.get('/me', authenticateToken, getCurrentUser);
 authRouter.put('/profile', authenticateToken, updateProfileInfo);
-
-// PUT /api/auth/password (Change password)
 authRouter.put('/password', authenticateToken, changePassword);
+
+// NEW: Account Stats (Dashboard Data)
+authRouter.get('/account/stats', authenticateToken, getAccountStatsController); // ← ADDED

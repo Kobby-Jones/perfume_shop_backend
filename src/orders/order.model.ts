@@ -23,7 +23,14 @@ export const createOrder = async (
     userId: number, 
     items: CartDetailItem[], 
     shippingAddress: any, 
-    totals: { tax: number, shipping: number, grandTotal: number }
+    totals: { 
+        subtotal: number, 
+        tax: number, 
+        shipping: number, 
+        grandTotal: number,
+        discountCode?: string | null, // NEW: Include discount data
+        discountAmount?: number | null 
+    }
 ): Promise<PrismaOrder> => {
     
     // We wrap this entire critical operation in a Prisma transaction for atomicity
@@ -44,18 +51,20 @@ export const createOrder = async (
             });
         }
         
-        // 2. Create the Order record
-        const newOrder = await tx.order.create({
-            data: {
-                userId,
-                orderTotal: totals.grandTotal,
-                shippingCost: totals.shipping,
-                taxAmount: totals.tax,
-                shippingAddress: shippingAddress as Prisma.InputJsonValue,
-                status: 'Pending', 
-                paymentStatus: 'pending',
-            },
-        });
+      // 2. Create the Order record
+const newOrder = await tx.order.create({
+    data: {
+        userId,
+        orderTotal: totals.grandTotal,
+        shippingCost: totals.shipping,
+        taxAmount: totals.tax,
+        shippingAddress: shippingAddress as Prisma.InputJsonValue,
+        status: 'Pending', 
+        paymentStatus: 'pending',
+        discountCode: totals.discountCode ?? null, // Convert undefined to null
+        discountAmount: totals.discountAmount ?? null, // Convert undefined to null
+    },
+});
         
         // 3. Create Order Items using price snapshot from cart details
         await tx.orderItem.createMany({

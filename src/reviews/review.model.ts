@@ -2,7 +2,6 @@
 
 import prisma from "../db";
 import { Review as PrismaReview } from "@prisma/client";
-import { UserSafe } from "../auth/auth.model";
 
 /**
  * Interface for a detailed Review entry returned to the frontend.
@@ -16,7 +15,7 @@ export interface ReviewDetail {
     title: string;
     comment: string;
     date: Date;
-    // Add verification or helpfulness if implemented later
+    helpfulCount: number; // NEW
 }
 
 /**
@@ -24,7 +23,7 @@ export interface ReviewDetail {
  */
 export async function getReviewsByProductId(productId: number): Promise<ReviewDetail[]> {
     const reviewsWithUser = await prisma.review.findMany({
-        where: { productId },
+        where: { productId, status: 'approved' }, // Only fetch approved reviews for public display
         include: {
             user: {
                 select: { name: true } // Select only the name
@@ -42,6 +41,7 @@ export async function getReviewsByProductId(productId: number): Promise<ReviewDe
         title: r.title,
         comment: r.comment,
         date: r.createdAt,
+        helpfulCount: r.helpfulCount, // NEW
     }));
 }
 
@@ -49,6 +49,7 @@ export async function getReviewsByProductId(productId: number): Promise<ReviewDe
  * Adds a new review, ensuring a unique constraint per user/product.
  */
 export async function addReview(reviewData: {
+// ... (signature remains the same)
     productId: number;
     userId: number;
     rating: number;
@@ -63,16 +64,11 @@ export async function addReview(reviewData: {
                 rating: reviewData.rating,
                 title: reviewData.title,
                 comment: reviewData.comment,
+                status: 'pending', // Default to pending for admin moderation
             },
         });
         
-        // **CRITICAL:** Update product rating/count after submission (Optional/Advanced: implement proper average calculation)
-        await prisma.$executeRaw`
-            UPDATE "Product"
-            SET "reviewCount" = (SELECT COUNT(*) FROM "Review" WHERE "productId" = ${reviewData.productId}),
-            "rating" = (SELECT AVG(rating) FROM "Review" WHERE "productId" = ${reviewData.productId})
-            WHERE id = ${reviewData.productId};
-        `;
+        // Note: Product rating update moved to admin.review.controllers.ts (when approved)
 
         return newReview;
     } catch (e: any) {
@@ -84,11 +80,11 @@ export async function addReview(reviewData: {
 }
 
 /**
- * Calculates the average rating and count for a product directly from the database.
+ * Calculates the average rating and count for a product directly from approved reviews.
  */
 export async function getAverageRating(productId: number): Promise<{ average: number, count: number }> {
     const result = await prisma.review.aggregate({
-        where: { productId },
+        where: { productId, status: 'approved' }, // IMPORTANT: Only aggregate approved reviews
         _avg: { rating: true },
         _count: { _all: true },
     });
@@ -96,11 +92,16 @@ export async function getAverageRating(productId: number): Promise<{ average: nu
     const average = parseFloat((result._avg.rating || 0).toFixed(1));
     const count = result._count._all;
     
-    // Fallback if no reviews exist, or use the pre-calculated fields
-    if (count === 0) {
-        const product = await prisma.product.findUnique({ where: { id: productId }, select: { rating: true, reviewCount: true } });
-        return { average: product?.rating || 0, count: product?.reviewCount || 0 };
-    }
-
+    // We rely on the aggregated result from approved reviews.
     return { average, count };
+}
+
+/**
+ * Increments the helpfulCount for a review.
+ */
+export async function incrementReviewHelpfulCount(reviewId: number): Promise<void> {
+    await prisma.review.update({
+        where: { id: reviewId },
+        data: { helpfulCount: { increment: 1 } },
+    });
 }

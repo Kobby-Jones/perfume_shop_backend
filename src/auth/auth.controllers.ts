@@ -12,9 +12,14 @@ import {
     toUserSafe
 } from './auth.model';
 import { AuthRequest } from './auth.middleware';
+import prisma from '../db'; // Assuming you import prisma client
+import crypto from 'crypto'; // For generating tokens
+import { getAccountStats } from './auth.model';
+
 
 const SALT_ROUNDS = 10;
 const JWT_SECRET = process.env.JWT_SECRET || 'a_secure_default_secret_for_dev_only';
+const RESET_TOKEN_EXPIRY_HOURS = 1; // Token expires in 1 hour
 
 /**
  * Generates a JWT for a user.
@@ -24,10 +29,33 @@ const generateToken = (user: { id: number; email: string; role: string }): strin
 };
 
 /**
+ * --- UTILITY STUB (Needs External Integration) ---
+ * Sends a password reset email to the user.
+ */
+const sendPasswordResetEmail = (email: string, token: string) => {
+    // In production, integrate with SendGrid, Mailgun, or Nodemailer here.
+    const resetLink = `${process.env.FRONTEND_URL}/account/auth/reset-password?token=${token}`;
+    
+    console.log(`\n======================================================`);
+    console.log(`!! MOCK EMAIL SENT TO ${email} !!`);
+    console.log(`Password Reset Link (valid for ${RESET_TOKEN_EXPIRY_HOURS}hr): ${resetLink}`);
+    console.log(`======================================================\n`);
+    
+    // NOTE: This part must be replaced by actual email API calls in production
+    // e.g., sendEmail({ to: email, subject: 'Password Reset', body: `Click here: ${resetLink}` });
+    
+    return resetLink;
+};
+
+
+// --- PUBLIC AUTHENTICATION ROUTES ---
+
+/**
  * POST /api/auth/register
  * Handles new user registration.
  */
 export const registerUser = async (req: Request, res: Response) => {
+// ... (Existing registerUser logic remains unchanged)
   const { name, email, password } = req.body;
 
   if (!name || !email || !password) {
@@ -65,6 +93,7 @@ export const registerUser = async (req: Request, res: Response) => {
  * Handles user login.
  */
 export const loginUser = async (req: Request, res: Response) => {
+// ... (Existing loginUser logic remains unchanged)
   const { email, password } = req.body;
 
   if (!email || !password) {
@@ -101,18 +130,106 @@ export const loginUser = async (req: Request, res: Response) => {
 };
 
 /**
- * POST /api/auth/logout
- * Confirms logout.
+ * POST /api/auth/forgot-password
+ * Initiates the password reset process by generating a token.
  */
+export const forgotPassword = async (req: Request, res: Response) => {
+    const { email } = req.body;
+    
+    if (!email) {
+        return res.status(400).json({ message: 'Email is required.' });
+    }
+
+    try {
+        const user = await findUserByEmailWithHash(email);
+
+        // SECURITY NOTE: We respond with success even if the user is not found to prevent email enumeration.
+        if (!user) {
+             return res.status(200).json({ message: 'If an account exists, a reset link has been sent to your email.' });
+        }
+        
+        // 1. Generate a secure, URL-safe reset token
+        const token = crypto.randomBytes(32).toString('hex');
+        const expiresAt = new Date(Date.now() + RESET_TOKEN_EXPIRY_HOURS * 60 * 60 * 1000);
+
+        // 2. Save the token, replacing any old ones
+        await prisma.passwordResetToken.deleteMany({ where: { userId: user.id } });
+
+        await prisma.passwordResetToken.create({
+            data: {
+                userId: user.id,
+                token,
+                expiresAt,
+            }
+        });
+
+        // 3. Send the reset link (uses stub)
+        sendPasswordResetEmail(user.email, token);
+
+        return res.status(200).json({ 
+            message: 'If an account exists, a reset link has been sent to your email.' 
+        });
+
+    } catch (error) {
+        console.error('Forgot Password Error:', error);
+        return res.status(500).json({ message: 'Internal server error during password reset request.' });
+    }
+};
+
+/**
+ * POST /api/auth/reset-password
+ * Resets the password using a valid token and new password.
+ */
+export const resetPassword = async (req: Request, res: Response) => {
+    const { token, newPassword } = req.body;
+    
+    if (!token || !newPassword) {
+        return res.status(400).json({ message: 'Token and new password are required.' });
+    }
+    
+    if (newPassword.length < 6) {
+         return res.status(400).json({ message: 'Password must be at least 6 characters.' });
+    }
+
+    try {
+        // 1. Find and validate the token
+        const resetToken = await prisma.passwordResetToken.findUnique({
+            where: { token },
+            include: { user: true }
+        });
+
+        const now = new Date();
+        if (!resetToken || resetToken.expiresAt < now) {
+            return res.status(400).json({ message: 'Invalid or expired reset token.' });
+        }
+        
+        const userId = resetToken.userId;
+        
+        // 2. Hash the new password
+        const newPasswordHash = await bcrypt.hash(newPassword, SALT_ROUNDS);
+
+        // 3. Update the password and delete the token in a transaction
+        await prisma.$transaction([
+            prisma.user.update({
+                where: { id: userId },
+                data: { passwordHash: newPasswordHash },
+            }),
+            prisma.passwordResetToken.delete({ where: { token } })
+        ]);
+
+        return res.status(200).json({ message: 'Password successfully reset. You can now log in.' });
+
+    } catch (error) {
+        console.error('Reset Password Error:', error);
+        return res.status(500).json({ message: 'Failed to reset password.' });
+    }
+};
+
+// ... (Existing logoutUser, getCurrentUser, updateProfileInfo, changePassword remain unchanged)
 export const logoutUser = (req: Request, res: Response) => {
   return res.status(200).json({ success: true, message: "Logged out successfully." });
 };
 
-/**
- * GET /api/auth/me
- * Verifies the token and returns the current authenticated user data.
- * Used by frontend to re-validate session on app load.
- */
 export const getCurrentUser = async (req: AuthRequest, res: Response) => {
     const userId = req.user!.id;
     try {
@@ -129,10 +246,6 @@ export const getCurrentUser = async (req: AuthRequest, res: Response) => {
     }
 };
 
-/**
- * PUT /api/account/profile
- * Updates user name and email.
- */
 export const updateProfileInfo = async (req: AuthRequest, res: Response) => {
     const userId = req.user!.id;
     const { name, email } = req.body;
@@ -161,10 +274,6 @@ export const updateProfileInfo = async (req: AuthRequest, res: Response) => {
 };
 
 
-/**
- * PUT /api/account/password
- * Changes the user's password.
- */
 export const changePassword = async (req: AuthRequest, res: Response) => {
     const userId = req.user!.id;
     const { currentPassword, newPassword } = req.body;
@@ -198,4 +307,20 @@ export const changePassword = async (req: AuthRequest, res: Response) => {
         console.error('Change Password Error:', error);
         return res.status(500).json({ message: 'Failed to update password.' });
     }
+};
+
+/**
+ * GET /api/auth/account/stats
+ * Returns user's account dashboard statistics.
+ */
+export const getAccountStatsController = async (req: AuthRequest, res: Response) => {
+  const userId = req.user!.id;
+
+  try {
+      const stats = await getAccountStats(userId);
+      return res.status(200).json({ stats });
+  } catch (error) {
+      console.error('Get Account Stats Error:', error);
+      return res.status(500).json({ message: 'Failed to retrieve account statistics.' });
+  }
 };

@@ -1,9 +1,12 @@
 // src/products/product.routes.ts
 
 import { Router } from 'express';
-import { listProducts, getProduct } from './product.controllers';
+import { listProducts, getProduct, listFilterOptions } from './product.controllers';
 
 export const productRouter = Router();
+
+// GET /api/products/filters
+productRouter.get('/filters', listFilterOptions);
 
 // GET /api/products
 productRouter.get('/', listProducts);

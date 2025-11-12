@@ -7,7 +7,7 @@ import { Review } from '@prisma/client';
 
 // Define the precise type structure returned by the Prisma query
 interface ReviewWithDetails extends Review {
-    product: { name: string };
+    product: { name: string; id: number };
     user: { name: string; email: string };
 }
 
@@ -19,7 +19,7 @@ export const listAllReviews = async (req: AuthRequest, res: Response) => {
     try {
         const reviews = await prisma.review.findMany({
             include: {
-                product: { select: { name: true } },
+                product: { select: { name: true, id: true } },
                 user: { select: { name: true, email: true } },
             },
             orderBy: { createdAt: 'desc' },
@@ -28,14 +28,15 @@ export const listAllReviews = async (req: AuthRequest, res: Response) => {
         // Map to a cleaner, flat structure for the frontend table
         const formattedReviews = reviews.map(r => ({
             id: r.id,
-            productName: r.product.name,
-            customerName: r.user.name,
-            customerEmail: r.user.email,
+            // Pass the original objects for safety checks in the frontend filter
+            product: r.product, 
+            user: r.user,
             rating: r.rating,
+            title: r.title,
             comment: r.comment,
-            date: r.createdAt.toISOString().split('T')[0],
+            // IMPORTANT: Use ISOString and split to match existing FE format
+            createdAt: r.createdAt.toISOString(), 
             status: r.status,
-            verified: true, 
         }));
 
         return res.status(200).json({ reviews: formattedReviews });
@@ -50,7 +51,7 @@ export const listAllReviews = async (req: AuthRequest, res: Response) => {
  * Updates the moderation status of a review.
  */
 export const updateReviewStatus = async (req: AuthRequest, res: Response) => {
-
+// ... (Controller logic remains the same, as it was already correct)
     // Check if id exists before parsing
     if (!req.params.id) {
         return res.status(400).json({ message: 'Review ID is required.' });

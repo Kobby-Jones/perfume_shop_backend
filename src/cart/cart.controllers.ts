@@ -1,52 +1,30 @@
 // src/cart/cart.controllers.ts
 
 import { Request, Response } from 'express';
-import { getDetailedCart, updateCartItem, removeCartItem } from './cart.model';
+import { 
+    getDetailedCart, 
+    updateCartItem, 
+    removeCartItem, 
+    calculateFinalTotals, 
+    clearUserCart 
+} from './cart.model';
 import { AuthRequest } from '../auth/auth.middleware';
-
-// --- Cart Utility Constants ---
-// In a real app, these would come from config or a tax service
-const SHIPPING_STANDARD_COST = 15.00;
-const SHIPPING_EXPRESS_COST = 25.00;
-const FREE_SHIPPING_THRESHOLD = 100.00;
-const TAX_RATE = 0.08;
-
-/**
- * Calculates totals for the order summary.
- */
-export const calculateTotals = (subtotal: number, shippingOption: 'standard' | 'express') => {
-    let shippingCost: number;
-    
-    if (shippingOption === 'express') {
-        shippingCost = SHIPPING_EXPRESS_COST;
-    } else {
-        shippingCost = subtotal >= FREE_SHIPPING_THRESHOLD ? 0 : SHIPPING_STANDARD_COST;
-    }
-
-    const grandTax = (subtotal + shippingCost) * TAX_RATE;
-    const grandTotal = subtotal + shippingCost + grandTax;
-
-    return {
-        subtotal,
-        tax: parseFloat(grandTax.toFixed(2)),
-        shipping: parseFloat(shippingCost.toFixed(2)),
-        grandTotal: parseFloat(grandTotal.toFixed(2)),
-    };
-};
 
 /**
  * GET /api/cart
  * Retrieves the user's current cart details.
+ * NOTE: This now uses the secure server-side calculation for the final totals
+ * but defaults to 'standard' shipping for the non-checkout page view.
  */
 export const getCart = async (req: AuthRequest, res: Response) => {
     try {
-        const userId = req.user!.id; // Authenticated user ID is guaranteed
-        const { items, cartTotal } = await getDetailedCart(userId);
+        const userId = req.user!.id; 
+        const { items, cartSubtotal } = await getDetailedCart(userId);
         
-        // Default totals (assumes standard shipping for initial cart view)
-        const totals = calculateTotals(cartTotal, 'standard');
+        // Calculate totals with default standard shipping (no discount for generic view)
+        const totals = await calculateFinalTotals(userId, 'standard', null);
 
-        return res.status(200).json({ items, totals });
+        return res.status(200).json({ items, totals, cartTotal: cartSubtotal });
     } catch (error) {
         console.error("Get Cart Error:", error);
         return res.status(500).json({ message: 'Failed to retrieve cart.' });
@@ -55,6 +33,8 @@ export const getCart = async (req: AuthRequest, res: Response) => {
 
 /**
  * POST /api/cart - Adds a new item or updates quantity.
+ * OPTIMIZED: Returns 204 No Content for faster response times.
+ * Client will refetch cart data using React Query invalidation.
  */
 export const addItemOrUpdateQuantity = async (req: AuthRequest, res: Response) => {
     const { productId, quantity } = req.body;
@@ -66,10 +46,9 @@ export const addItemOrUpdateQuantity = async (req: AuthRequest, res: Response) =
 
     try {
         await updateCartItem(userId, productId, quantity);
-        const { items, cartTotal } = await getDetailedCart(userId);
-        const totals = calculateTotals(cartTotal, 'standard'); 
         
-        return res.status(200).json({ items, totals });
+        // Return 204 No Content - client will refetch via React Query
+        return res.status(204).send();
     } catch (error: any) {
         return res.status(400).json({ message: error.message || 'Failed to update cart.' });
     }
@@ -77,6 +56,7 @@ export const addItemOrUpdateQuantity = async (req: AuthRequest, res: Response) =
 
 /**
  * DELETE /api/cart/:productId - Removes an item from the cart.
+ * OPTIMIZED: Returns 204 No Content for faster response times.
  */
 export const removeItem = async (req: AuthRequest, res: Response) => {
     const productId = parseInt(req.params.productId || '');
@@ -88,12 +68,53 @@ export const removeItem = async (req: AuthRequest, res: Response) => {
 
     try {
         await removeCartItem(userId, productId);
-        const { items, cartTotal } = await getDetailedCart(userId);
-        const totals = calculateTotals(cartTotal, 'standard'); 
-
-        return res.status(200).json({ items, totals });
+        
+        // Return 204 No Content - client will refetch via React Query
+        return res.status(204).send();
     } catch (error) {
         console.error("Remove Cart Item Error:", error);
         return res.status(500).json({ message: 'Failed to remove item from cart.' });
+    }
+};
+
+/**
+ * POST /api/cart/calculate - CRITICAL NEW ENDPOINT
+ * Calculates final totals based on user's cart, shipping option, and discount code.
+ * Ensures all financial calculations are serverside.
+ */
+export const calculateFinalCart = async (req: AuthRequest, res: Response) => {
+    const { shippingOption, discountCode } = req.body;
+    const userId = req.user!.id;
+    
+    if (!shippingOption || !['standard', 'express'].includes(shippingOption)) {
+        return res.status(400).json({ message: 'Invalid shipping option provided.' });
+    }
+
+    try {
+        const finalTotals = await calculateFinalTotals(userId, shippingOption, discountCode);
+        
+        // IMPORTANT: We only return the calculated totals, not the cart items themselves.
+        return res.status(200).json(finalTotals);
+    } catch (error: any) {
+        console.error("Calculate Final Cart Error:", error);
+        return res.status(500).json({ message: error.message || 'Failed to calculate final totals.' });
+    }
+};
+
+/**
+ * DELETE /api/cart/clear - NEW ENDPOINT
+ * Clears all items from the user's cart.
+ * OPTIMIZED: Returns 204 No Content for faster response times.
+ */
+export const clearCartController = async (req: AuthRequest, res: Response) => {
+    const userId = req.user!.id;
+    try {
+        await clearUserCart(userId);
+        
+        // Return 204 No Content - client will refetch via React Query
+        return res.status(204).send();
+    } catch (error) {
+        console.error("Clear Cart Error:", error);
+        return res.status(500).json({ message: 'Failed to clear cart.' });
     }
 };

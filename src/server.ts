@@ -21,7 +21,7 @@ const PORT = process.env.PORT || 4000;
 // Middleware
 app.use(cors({
   // Use environment variable for frontend URL in production
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000', 
+  origin: process.env.FRONTEND_URL || 'https://scentiaperfume.netlify.app', 
   credentials: true,
 }));
 

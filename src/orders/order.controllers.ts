@@ -10,16 +10,15 @@ import {
     verifyOrderPayment,
     markOrderFailed
 } from './order.model';
-import { getDetailedCart } from '../cart/cart.model';
-import { calculateTotals } from '../cart/cart.controllers';
+import { getDetailedCart, calculateFinalTotals } from '../cart/cart.model'; // Use the secure model function
 import { AuthRequest } from '../auth/auth.middleware';
 
 /**
  * POST /api/checkout/order
- * Creates a new order record from the user's cart.
+ * Creates a new order record from the user's cart, securely validating totals.
  */
 export const placeOrder = async (req: AuthRequest, res: Response) => {
-    const { shippingAddress, shippingOption } = req.body;
+    const { shippingAddress, shippingOption, discountCode } = req.body; // Expecting discountCode from FE
     const userId = req.user!.id;
 
     if (!shippingAddress || !shippingOption) {
@@ -27,16 +26,32 @@ export const placeOrder = async (req: AuthRequest, res: Response) => {
     }
 
     try {
-        // 1. Get detailed cart and calculate final totals
-        const { items, cartTotal } = await getDetailedCart(userId);
+        // 1. Get detailed cart and CRITICALLY calculate final totals server-side
+        const { items } = await getDetailedCart(userId);
         if (items.length === 0) {
             return res.status(400).json({ message: 'Cannot place order, cart is empty.' });
         }
 
-        const totals = calculateTotals(cartTotal, shippingOption);
-
-        // 2. Create the order and deduct inventory in a transaction
-        const newOrder = await createOrder(userId, items, shippingAddress, totals);
+        const finalTotals = await calculateFinalTotals(userId, shippingOption, discountCode);
+        
+        // Extract the original subtotal (cartSubtotal) before discount from the finalTotals object
+        // NOTE: We rely on the model to return the original subtotal which it now does.
+        const orderSubtotal = finalTotals.subtotal; 
+        
+ // 2. Create the order and deduct inventory in a transaction
+const newOrder = await createOrder(
+    userId, 
+    items, 
+    shippingAddress, 
+    {
+        subtotal: orderSubtotal,
+        tax: finalTotals.tax, 
+        shipping: finalTotals.shipping, 
+        grandTotal: finalTotals.grandTotal,
+        discountCode: finalTotals.discountCode ?? null,
+        discountAmount: finalTotals.discountAmount ?? null,
+    }
+);
         
         // 3. Generate unique payment reference
         const paymentReference = `PS-${newOrder.id}-${Date.now()}`;

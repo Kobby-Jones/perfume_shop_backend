@@ -105,6 +105,7 @@ export async function deleteDiscount(id: number): Promise<void> {
 
 /**
  * Finds a valid, active discount by code.
+ * Exported for use in cart calculation logic.
  */
 export async function getValidDiscount(code: string): Promise<Discount | null> {
     const discount = await prisma.discount.findUnique({
@@ -128,4 +129,11 @@ export async function incrementDiscountUse(id: number): Promise<void> {
         where: { id },
         data: { currentUses: { increment: 1 } },
     });
+}
+
+export { 
+    getAllDiscounts as getAllDiscountsModel, 
+    createDiscount as createDiscountModel,
+    updateDiscount as updateDiscountModel,
+    deleteDiscount as deleteDiscountModel,
 }
