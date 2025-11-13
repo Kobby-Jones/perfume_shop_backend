@@ -3,13 +3,13 @@
 import { Request, Response } from 'express';
 import { AuthRequest } from '../auth/auth.middleware';
 import { getReviewsByProductId, addReview, getAverageRating, incrementReviewHelpfulCount } from './review.model';
+import sanitizeHtml from 'sanitize-html'; // <-- NEW IMPORT
 
 /**
  * GET /api/reviews/:productId
  * Retrieves all reviews and average rating for a product.
  */
 export const listReviews = async (req: Request, res: Response) => {
-// ... (remains unchanged)
     const productIdStr = req.params.productId;
     
     if (!productIdStr) {
@@ -41,7 +41,6 @@ export const listReviews = async (req: Request, res: Response) => {
  * Creates a new review (requires authentication).
  */
 export const createReview = async (req: AuthRequest, res: Response) => {
-// ... (remains unchanged)
     const { productId, rating, title, comment } = req.body;
     const userId = req.user!.id; 
 
@@ -50,12 +49,23 @@ export const createReview = async (req: AuthRequest, res: Response) => {
     }
 
     try {
+        // --- START OF SANITIZATION ---
+        const sanitizedTitle = sanitizeHtml(title, {
+            allowedTags: [], // Strip all HTML tags
+            allowedAttributes: {}
+        });
+        const sanitizedComment = sanitizeHtml(comment, {
+            allowedTags: [], // Strip all HTML tags
+            allowedAttributes: {}
+        });
+        // --- END OF SANITIZATION ---
+        
         const newReview = await addReview({
             productId,
             userId,
             rating,
-            title,
-            comment,
+            title: sanitizedTitle, // <-- USE SANITIZED VALUE
+            comment: sanitizedComment, // <-- USE SANITIZED VALUE
         });
 
         return res.status(201).json(newReview);

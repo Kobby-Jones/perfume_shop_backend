@@ -12,11 +12,50 @@ import { reviewRouter } from './reviews/review.routes';
 import { adminRouter } from './admin/admin.routes'; 
 import { addressRouter } from './addresses/address.routes';
 import { publicDiscountRouter } from './discounts/discount.routes';
+import rateLimit from 'express-rate-limit';
 
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 4000;
+
+// --- 1. DEFINE AND EXPORT RATE LIMITERS ---
+
+/**
+ * General Limiter: Applied to all API routes by default.
+ * Allows 1000 requests per 15 minutes.
+ */
+export const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 1000, 
+  message: 'Too many requests from this IP, please try again after 15 minutes.',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+/**
+ * Auth Limiter: Applied to login, registration, and password reset attempts.
+ * Allows 10 attempts per 15 minutes.
+ */
+export const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10, 
+  message: 'Too many authentication attempts. Please try again after 15 minutes.',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+/**
+ * Checkout Limiter: Applied to the order placement endpoint.
+ * Allows a maximum of 5 orders per hour to prevent inventory spamming.
+ */
+export const checkoutLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 5, 
+  message: 'Too many order attempts. You can place up to 5 orders per hour.',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 // Middleware
 app.use(cors({
@@ -26,6 +65,8 @@ app.use(cors({
 }));
 
 app.use(express.json()); 
+// --- 2. APPLY GENERAL RATE LIMITING TO ALL PUBLIC ROUTES ---
+app.use(generalLimiter); // Applies to all routes by default
 
 // --- API Routes ---
 app.use('/api/auth', authRouter);
